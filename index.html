@@ -408,17 +408,17 @@ function isDeployed() {
 }
 
 async function airtableRequest(path, options = {}) {
-  let url, fetchHeaders;
+  let url, fetchHeaders = {};
 
   if (isDeployed()) {
-    // En production (Netlify) : passer par le proxy pour éviter le CORS
+    // En production (Netlify) : le proxy gère le token via variable d'env
     const airtablePath = `${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
     url = `/.netlify/functions/airtable-proxy?path=${encodeURIComponent(airtablePath)}`;
-    fetchHeaders = { 'X-Airtable-Token': state.pat };
   } else {
-    // En local (file://) : appel direct vers Airtable
+    // En local (file://) : appel direct avec token stocké en localStorage
     url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
-    fetchHeaders = { 'Authorization': `Bearer ${state.pat}` };
+    const pat = localStorage.getItem(STORAGE_KEY);
+    if (pat) fetchHeaders['Authorization'] = `Bearer ${pat}`;
   }
 
   if (options.method && options.method !== 'GET') fetchHeaders['Content-Type'] = 'application/json';
@@ -1802,61 +1802,39 @@ function showMain() {
 }
 
 async function handleSetup() {
+  // Ce flow ne s'exécute QUE en mode local (file://)
   const input = document.getElementById('setup-pat');
   const err = document.getElementById('setup-error');
   const btn = document.getElementById('setup-submit');
   const pat = input.value.trim();
 
   err.classList.add('hidden');
-  if (!pat) {
-    err.textContent = 'Merci de coller votre Personal Access Token.';
-    err.classList.remove('hidden');
-    return;
-  }
-  if (!pat.startsWith('pat')) {
-    err.textContent = 'Le token doit commencer par "pat". Vérifiez que vous avez bien collé le bon.';
-    err.classList.remove('hidden');
-    return;
-  }
+  if (!pat) { err.textContent = 'Merci de coller votre Personal Access Token.'; err.classList.remove('hidden'); return; }
+  if (!pat.startsWith('pat')) { err.textContent = 'Le token doit commencer par "pat".'; err.classList.remove('hidden'); return; }
 
   btn.disabled = true;
   btn.innerHTML = '<span>Test de connexion...</span>';
 
-  // Test la connexion en listant une page
   try {
-    state.pat = pat;
-    let testUrl, testHeaders;
-    if (isDeployed()) {
-      const airtablePath = `${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`;
-      testUrl = `/.netlify/functions/airtable-proxy?path=${encodeURIComponent(airtablePath)}`;
-      testHeaders = { 'X-Airtable-Token': pat };
-    } else {
-      testUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`;
-      testHeaders = { 'Authorization': `Bearer ${pat}` };
-    }
-    const res = await fetch(testUrl, { headers: testHeaders });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`${res.status} : ${text.slice(0, 150)}`);
-    }
-    // OK : sauvegarder et passer à l'écran principal
+    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`, {
+      headers: { 'Authorization': `Bearer ${pat}` },
+    });
+    if (!res.ok) { const text = await res.text(); throw new Error(`${res.status} : ${text.slice(0, 150)}`); }
     localStorage.setItem(STORAGE_KEY, pat);
     showMain();
     loadProspects();
     startAutoRefresh();
   } catch (e) {
-    state.pat = null;
     err.textContent = `Impossible de se connecter : ${e.message}`;
     err.classList.remove('hidden');
     btn.disabled = false;
-    btn.innerHTML = '<span>Connexion</span><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>';
+    btn.innerHTML = '<span>Connexion</span>';
   }
 }
 
 function handleLogout() {
-  if (!confirm('Effacer votre clé API Airtable et revenir à l\'écran de connexion ?')) return;
+  if (!confirm('Revenir \u00e0 l\u2019\u00e9cran de connexion ?')) return;
   localStorage.removeItem(STORAGE_KEY);
-  state.pat = null;
   state.prospects = [];
   stopAutoRefresh();
   showSetup();
@@ -1886,9 +1864,6 @@ function stopAutoRefresh() {
 
 function init() {
   // Handlers globaux
-  document.getElementById('setup-submit').onclick = handleSetup;
-  document.getElementById('setup-pat').onkeydown = e => { if (e.key === 'Enter') handleSetup(); };
-  document.getElementById('logout-btn').onclick = handleLogout;
   document.getElementById('refresh-btn').onclick = () => loadProspects(false);
   document.getElementById('search-input').oninput = e => {
     state.filters.search = e.target.value;
@@ -1899,7 +1874,6 @@ function init() {
   document.getElementById('modal-backdrop').onclick = e => {
     if (e.target.id === 'modal-backdrop') closeModal();
   };
-  // Navigation entre vues
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.onclick = () => switchView(btn.dataset.view);
   });
@@ -1907,15 +1881,29 @@ function init() {
     if (e.key === 'Escape' && state.selectedProspect) closeModal();
   });
 
-  // Charger PAT si présent
-  const savedPAT = localStorage.getItem(STORAGE_KEY);
-  if (savedPAT) {
-    state.pat = savedPAT;
+  if (isDeployed()) {
+    // Sur Netlify : pas de login, le token est dans les variables d'env serveur
+    // On masque le bouton déconnexion (inutile en mode déployé)
+    document.getElementById('logout-btn').classList.add('hidden');
     showMain();
     loadProspects();
     startAutoRefresh();
   } else {
-    showSetup();
+    // En local (file://) : écran de login pour saisir le PAT
+    var setupSubmit = document.getElementById('setup-submit');
+    var setupPat = document.getElementById('setup-pat');
+    if (setupSubmit) setupSubmit.onclick = handleSetup;
+    if (setupPat) setupPat.onkeydown = e => { if (e.key === 'Enter') handleSetup(); };
+    document.getElementById('logout-btn').onclick = handleLogout;
+
+    var savedPAT = localStorage.getItem(STORAGE_KEY);
+    if (savedPAT) {
+      showMain();
+      loadProspects();
+      startAutoRefresh();
+    } else {
+      showSetup();
+    }
   }
 }
 
