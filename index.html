@@ -404,13 +404,11 @@ function escapeHtml(s) {
 
 async function airtableRequest(path, options = {}) {
   const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
+  const headers = { 'Authorization': `Bearer ${state.pat}` };
+  if (options.method && options.method !== 'GET') headers['Content-Type'] = 'application/json';
   const res = await fetch(url, {
     ...options,
-    headers: {
-      'Authorization': `Bearer ${state.pat}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers: { ...headers, ...options.headers },
   });
   if (!res.ok) {
     const text = await res.text();
@@ -1810,7 +1808,7 @@ async function handleSetup() {
   // Test la connexion en listant une page
   try {
     state.pat = pat;
-    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?maxRecords=1`, {
+    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`, {
       headers: { 'Authorization': `Bearer ${pat}` },
     });
     if (!res.ok) {
