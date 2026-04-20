@@ -402,13 +402,30 @@ function escapeHtml(s) {
  * AIRTABLE API
  * ============================================================================ */
 
+// Détecte si on est en local (file://) ou déployé (https://)
+function isDeployed() {
+  return window.location.protocol === 'https:' || window.location.protocol === 'http:';
+}
+
 async function airtableRequest(path, options = {}) {
-  const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
-  const headers = { 'Authorization': `Bearer ${state.pat}` };
-  if (options.method && options.method !== 'GET') headers['Content-Type'] = 'application/json';
+  let url, fetchHeaders;
+
+  if (isDeployed()) {
+    // En production (Netlify) : passer par le proxy pour éviter le CORS
+    const airtablePath = `${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
+    url = `/.netlify/functions/airtable-proxy?path=${encodeURIComponent(airtablePath)}`;
+    fetchHeaders = { 'X-Airtable-Token': state.pat };
+  } else {
+    // En local (file://) : appel direct vers Airtable
+    url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}${path}`;
+    fetchHeaders = { 'Authorization': `Bearer ${state.pat}` };
+  }
+
+  if (options.method && options.method !== 'GET') fetchHeaders['Content-Type'] = 'application/json';
+
   const res = await fetch(url, {
     ...options,
-    headers: { ...headers, ...options.headers },
+    headers: { ...fetchHeaders, ...options.headers },
   });
   if (!res.ok) {
     const text = await res.text();
@@ -1808,9 +1825,16 @@ async function handleSetup() {
   // Test la connexion en listant une page
   try {
     state.pat = pat;
-    const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`, {
-      headers: { 'Authorization': `Bearer ${pat}` },
-    });
+    let testUrl, testHeaders;
+    if (isDeployed()) {
+      const airtablePath = `${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`;
+      testUrl = `/.netlify/functions/airtable-proxy?path=${encodeURIComponent(airtablePath)}`;
+      testHeaders = { 'X-Airtable-Token': pat };
+    } else {
+      testUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?pageSize=1&returnFieldsByFieldId=true`;
+      testHeaders = { 'Authorization': `Bearer ${pat}` };
+    }
+    const res = await fetch(testUrl, { headers: testHeaders });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`${res.status} : ${text.slice(0, 150)}`);
